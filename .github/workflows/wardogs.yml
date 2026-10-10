@@ -1,0 +1,55 @@
+# In GitHub anlegen als:  .github/workflows/wardogs.yml
+name: WARDOGS Steam Updates
+
+on:
+  schedule:
+    # alle 10 Minuten (bewusst nicht auf :00, dort sind GitHub-Cronjobs oft verspätet)
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Neueste Ankündigung als Test in Discord posten"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # damit der Bot seinen Status (wardogs_state.json) speichern kann
+
+concurrency:
+  group: wardogs-bot
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Steam prüfen und in Discord posten
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PING_ROLE_ID: ${{ vars.PING_ROLE_ID }}
+          TRACK_BUILDS: ${{ vars.TRACK_BUILDS || '1' }}
+        run: |
+          if [ "${{ inputs.test }}" = "true" ]; then
+            python3 wardogs_steam_bot.py --test
+          else
+            python3 wardogs_steam_bot.py --once
+          fi
+
+      - name: Status speichern
+        if: ${{ always() && inputs.test != true }}
+        run: |
+          [ -f wardogs_state.json ] || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add wardogs_state.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Bot-Status aktualisiert"
+            git push
+          elif [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt 2592000 ]; then
+            # GitHub pausiert Zeitpläne nach 60 Tagen ohne Aktivität -> alle 30 Tage Keepalive
+            git commit --allow-empty -m "Keepalive"
+            git push
+          fi
